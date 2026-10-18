@@ -1,0 +1,330 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+
+  <title>Consultor de Preços FLASH</title>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #f3f5f9;
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+
+    .container {
+      max-width: 440px;
+      margin: 15px auto;
+      padding: 22px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 3px 15px #00000012;
+    }
+
+    h1 {
+      color: #123f8a;
+      margin-bottom: 4px;
+    }
+
+    h2 {
+      color: #333;
+      font-size: 20px;
+    }
+
+    p { color: #555; }
+
+    button {
+      display: block;
+      width: 100%;
+      padding: 15px;
+      margin: 12px 0;
+      border: none;
+      border-radius: 9px;
+      background: #123f8a;
+      color: white;
+      font-size: 17px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+    }
+
+    #btnParar {
+      display: none;
+      background: #b42318;
+    }
+
+    input {
+      width: 100%;
+      padding: 14px;
+      font-size: 18px;
+      text-align: center;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+    }
+
+    #reader {
+      width: 100%;
+      margin: 15px auto;
+    }
+
+    #status {
+      margin: 12px 0;
+      font-size: 14px;
+      color: #555;
+      overflow-wrap: anywhere;
+    }
+
+    #resultado {
+      margin-top: 20px;
+      padding: 10px;
+    }
+
+    .produto {
+      font-size: 21px;
+      font-weight: bold;
+    }
+
+    .preco {
+      margin-top: 12px;
+      color: #16803c;
+      font-size: 34px;
+      font-weight: bold;
+    }
+
+    .erro { color: #b42318; }
+
+    hr {
+      border: none;
+      border-top: 1px solid #ddd;
+      margin: 25px 0;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+
+  <h1>FLASH</h1>
+  <h2>Consultor de Preços</h2>
+
+  <p>Aponte a câmera para o código de barras do produto.</p>
+
+  <button id="btnIniciar" onclick="iniciarCamera()">
+    Ler código de barras
+  </button>
+
+  <button id="btnParar" onclick="pararCamera()">
+    Fechar câmera
+  </button>
+
+  <div id="reader"></div>
+  <div id="status"></div>
+
+  <hr>
+
+  <p>Ou digite o código de barras:</p>
+
+  <input
+    type="text"
+    id="codigo"
+    inputmode="numeric"
+    placeholder="Código de barras"
+  >
+
+  <button onclick="consultarManual()">
+    Consultar preço
+  </button>
+
+  <div id="resultado" aria-live="polite"></div>
+
+</div>
+
+<script>
+  const API_URL =
+    "https://script.google.com/macros/s/AKfycbyhWY-Zh-sMlLOpiJve9wmASHWulQYb_xbdm7X68dNAfJQhTW8v9xyho3PY0PSCa7Q82g/exec";
+
+  let scanner = null;
+  let iniciando = false;
+  let leituraRealizada = false;
+  let consultaAtual = 0;
+
+  const statusEl = document.getElementById("status");
+  const resultado = document.getElementById("resultado");
+  const btnIniciar = document.getElementById("btnIniciar");
+  const btnParar = document.getElementById("btnParar");
+
+  function mostrarStatus(texto, erro = false) {
+    statusEl.textContent = texto;
+    statusEl.className = erro ? "erro" : "";
+  }
+
+  function atualizarBotoes() {
+    btnIniciar.disabled = iniciando || scanner !== null;
+    btnParar.style.display =
+      scanner && scanner.isScanning ? "block" : "none";
+  }
+
+  async function iniciarCamera() {
+    if (scanner || iniciando) return;
+
+    iniciando = true;
+    leituraRealizada = false;
+    resultado.textContent = "";
+    mostrarStatus("Iniciando câmera...");
+    atualizarBotoes();
+
+    try {
+      if (typeof Html5Qrcode === "undefined") {
+        throw new Error("Biblioteca de leitura indisponível.");
+      }
+
+      scanner = new Html5Qrcode("reader");
+
+      await scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: function(w, h) {
+            return {
+              width: Math.min(250, w),
+              height: Math.min(150, h)
+            };
+          }
+        },
+        async function(codigo) {
+          if (leituraRealizada) return;
+
+          leituraRealizada = true;
+          document.getElementById("codigo").value = codigo;
+
+          await pararCamera();
+          consultarProduto(codigo);
+        },
+        function() {}
+      );
+
+      mostrarStatus("Câmera ativa. Aponte para o código.");
+
+    } catch (erro) {
+      mostrarStatus(
+        "Erro ao abrir câmera: " + String(erro),
+        true
+      );
+
+      if (scanner) {
+        try {
+          if (scanner.isScanning) await scanner.stop();
+          scanner.clear();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      scanner = null;
+    } finally {
+      iniciando = false;
+      atualizarBotoes();
+    }
+  }
+
+  async function pararCamera() {
+    if (!scanner) return;
+
+    const leitor = scanner;
+    scanner = null;
+
+    try {
+      if (leitor.isScanning) await leitor.stop();
+      leitor.clear();
+    } catch (erro) {
+      console.error(erro);
+    }
+
+    mostrarStatus("");
+    atualizarBotoes();
+  }
+
+  function consultarManual() {
+    const codigo =
+      document.getElementById("codigo").value.trim();
+
+    consultarProduto(codigo);
+  }
+
+  function consultarProduto(codigo) {
+    resultado.textContent = "";
+
+    if (!/^[0-9]{8,14}$/.test(codigo)) {
+      resultado.textContent = "Código de barras inválido.";
+      return;
+    }
+
+    resultado.textContent = "Consultando preço...";
+
+    const numeroConsulta = ++consultaAtual;
+    const callback = "flashCallback" + numeroConsulta;
+    const script = document.createElement("script");
+
+    const timeout = setTimeout(function() {
+      limpar();
+      resultado.textContent =
+        "A consulta demorou demais. Tente novamente.";
+    }, 15000);
+
+    function limpar() {
+      clearTimeout(timeout);
+      delete window[callback];
+      script.remove();
+    }
+
+    window[callback] = function(dados) {
+      limpar();
+
+      if (numeroConsulta !== consultaAtual) return;
+
+      resultado.textContent = "";
+
+      if (dados.encontrado) {
+        const nome = document.createElement("div");
+        nome.className = "produto";
+        nome.textContent = dados.produto;
+
+        const preco = document.createElement("div");
+        preco.className = "preco";
+        preco.textContent = dados.preco;
+
+        resultado.appendChild(nome);
+        resultado.appendChild(preco);
+      } else {
+        resultado.textContent =
+          dados.mensagem || "Produto não encontrado.";
+      }
+    };
+
+    script.onerror = function() {
+      limpar();
+      resultado.textContent =
+        "Erro de comunicação. Tente novamente.";
+    };
+
+    script.src = API_URL +
+      "?codigo=" + encodeURIComponent(codigo) +
+      "&callback=" + encodeURIComponent(callback);
+
+    document.body.appendChild(script);
+  }
+</script>
+
+</body>
+</html>
